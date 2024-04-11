@@ -13,21 +13,27 @@ type Signal struct {
 	// Define properties of a Signal here
 }
 
-func transmitter(tx []chan Signal, wg *sync.WaitGroup, id int, points Point) {
+type Pdu struct {
+	point Point
+	id    int
+}
+
+func transmitter(tx []chan Signal, wg *sync.WaitGroup, id int, pdu Pdu) {
 	defer wg.Done()
 	// Simulate transmitting a signal
 	for i, ch := range tx {
 		ch <- Signal{}
-		fmt.Printf("Transmitter %d sent a signal to Receiver %d with point x:%d y:%d \n", id, i, points.x, points.y)
+		fmt.Printf("Transmitter %d sent a signal to Receiver %d with pdu id:%d \n", id, i, pdu.id)
 	}
 }
 
-func receiver(rx []chan Signal, wg *sync.WaitGroup, id int, points Point) {
+func receiver(rx []chan Signal, wg *sync.WaitGroup, id int, pdu Pdu, pduDictionary *map[int][]Point) {
 	defer wg.Done()
 	// Simulate receiving a signal
 	for i, ch := range rx {
 		<-ch
-		fmt.Printf("Receiver %d received a signal from Transmitter %d with point x:%d y:%d \n", id, i, points.x, points.y)
+		fmt.Printf("Receiver %d received a signal from Transmitter %d with pdu id:%d \n", id, i, pdu.id)
+		(*pduDictionary)[pdu.id] = append((*pduDictionary)[pdu.id], pdu.point)
 	}
 }
 
@@ -75,11 +81,13 @@ func main() {
 
 		bits := bytesToBits(data)
 		points := modulate(bits, M)
+		pduDictionary := make(map[int][]Point)
 		//Iterate all points and send them to the antennas
-		for _, point := range points {
+		for count, point := range points {
+			pdu := Pdu{point, count}
 			for i := 0; i < txAntenna; i++ {
 				wg.Add(1)
-				go transmitter(matrix[i], &wg, i, point)
+				go transmitter(matrix[i], &wg, i, pdu)
 			}
 
 			for i := 0; i < rxAntenna; i++ {
@@ -88,12 +96,15 @@ func main() {
 					rx[j] = matrix[j][i]
 				}
 				wg.Add(1)
-				go receiver(rx, &wg, i, point)
+				go receiver(rx, &wg, i, pdu, &pduDictionary)
 			}
 		}
 
 		wg.Wait()
 
+		//Print the pduDictionary
+		fmt.Println(pduDictionary)
+		break
 		/*bitsRestore := demodulate(pathModulatePoints, M, noise)
 		originalBytes := bitsToBytes(bitsRestore)
 		writeRestoreFile("restore_"+pathFile, originalBytes)*/
