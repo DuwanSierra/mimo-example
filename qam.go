@@ -1,12 +1,9 @@
 package main
 
 import (
-	"encoding/csv"
 	"fmt"
 	"math/big"
-	"math/rand"
 	"os"
-	"strconv"
 	"time"
 )
 
@@ -87,43 +84,15 @@ func bitsToInt(bits []int64) int64 {
 	return val
 }
 
-func demodulate(filePath string, M *big.Int, noiseStdDev float64) []int64 {
-	file, err := os.Open(filePath)
-	if err != nil {
-		fmt.Println("Error reading file:", err)
-		return nil
-	}
-	defer file.Close()
-
-	reader := csv.NewReader(file)
+func demodulate(points []Point, M *big.Int, noiseStdDev float64) []int64 {
 
 	var bits []int64
 	bitsPerSymbol := M.BitLen() - 1
 
-	records, err := reader.ReadAll()
-	if err != nil {
-		fmt.Println("Error reading file:", err)
-		return nil
-	}
+	for _, point := range points {
 
-	for _, record := range records {
-		x, err := strconv.ParseInt(record[0], 10, 64)
-		if err != nil {
-			fmt.Println("Error parsing x coordinate:", err)
-			return nil
-		}
-
-		y, err := strconv.ParseInt(record[1], 10, 64)
-		if err != nil {
-			fmt.Println("Error parsing y coordinate:", err)
-			return nil
-		}
-
-		x += int64(rand.NormFloat64() * noiseStdDev)
-		y += int64(rand.NormFloat64() * noiseStdDev)
-
-		xBits := intToBits(x, bitsPerSymbol/2)
-		yBits := intToBits(y, bitsPerSymbol/2)
+		xBits := intToBits(point.x, bitsPerSymbol/2)
+		yBits := intToBits(point.y, bitsPerSymbol/2)
 
 		bits = append(bits, xBits...)
 		bits = append(bits, yBits...)

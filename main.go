@@ -9,31 +9,34 @@ import (
 	"time"
 )
 
-type Signal struct {
-	// Define properties of a Signal here
-}
-
 type Pdu struct {
 	point Point
 	id    int
 }
 
-func transmitter(tx []chan Signal, wg *sync.WaitGroup, id int, pdu Pdu) {
+type Signal struct {
+	// Define properties of a Signal here
+	data Pdu
+}
+
+func transmitter(tx []chan Signal, wg *sync.WaitGroup, pdu Pdu) {
 	defer wg.Done()
 	// Simulate transmitting a signal
-	for i, ch := range tx {
-		ch <- Signal{}
-		fmt.Printf("Transmitter %d sent a signal to Receiver %d with pdu id:%d \n", id, i, pdu.id)
+	for _, ch := range tx {
+		//fmt.Println("Transmitting signal: ", pdu.id)
+		ch <- Signal{
+			data: pdu,
+		}
 	}
 }
 
-func receiver(rx []chan Signal, wg *sync.WaitGroup, id int, pdu Pdu, pduDictionary *map[int][]Point) {
+func receiver(rx []chan Signal, wg *sync.WaitGroup, pduDictionary *[]Pdu) {
 	defer wg.Done()
 	// Simulate receiving a signal
-	for i, ch := range rx {
-		<-ch
-		fmt.Printf("Receiver %d received a signal from Transmitter %d with pdu id:%d \n", id, i, pdu.id)
-		(*pduDictionary)[pdu.id] = append((*pduDictionary)[pdu.id], pdu.point)
+	for _, ch := range rx {
+		data := <-ch
+		//fmt.Println("Data received", data.data.id)
+		*pduDictionary = append(*pduDictionary, data.data)
 	}
 }
 
@@ -41,7 +44,7 @@ func main() {
 	defer timeTrack(time.Now(), "Modulation and Demodulation")
 	pathFile := "input_video.mp4"
 	level := 64
-	//noise := 0.20
+	noise := 0.20
 	chunkSize := 8192 // size of each chunk in bytes
 
 	M := new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(level)), nil)
@@ -81,13 +84,13 @@ func main() {
 
 		bits := bytesToBits(data)
 		points := modulate(bits, M)
-		pduDictionary := make(map[int][]Point)
+		pduDictionary := make([]Pdu, 0)
 		//Iterate all points and send them to the antennas
 		for count, point := range points {
 			pdu := Pdu{point, count}
 			for i := 0; i < txAntenna; i++ {
 				wg.Add(1)
-				go transmitter(matrix[i], &wg, i, pdu)
+				go transmitter(matrix[i], &wg, pdu)
 			}
 
 			for i := 0; i < rxAntenna; i++ {
@@ -96,18 +99,42 @@ func main() {
 					rx[j] = matrix[j][i]
 				}
 				wg.Add(1)
-				go receiver(rx, &wg, i, pdu, &pduDictionary)
+				go receiver(rx, &wg, &pduDictionary)
 			}
 		}
 
 		wg.Wait()
-
-		//Print the pduDictionary
-		fmt.Println(pduDictionary)
-		break
-		/*bitsRestore := demodulate(pathModulatePoints, M, noise)
+		pduMap := orderPdu(pduDictionary)
+		restorePoints := createPduFromAverageOfPdu(pduMap)
+		bitsRestore := demodulate(restorePoints, M, noise)
 		originalBytes := bitsToBytes(bitsRestore)
-		writeRestoreFile("restore_"+pathFile, originalBytes)*/
+		writeRestoreFile("restore_"+pathFile, originalBytes)
 	}
 	fmt.Println("Successfully demodulated the data!")
+}
+
+func orderPdu(pduDictionary []Pdu) map[int][]Pdu {
+	//Order the pduDictionary
+	pduMap := make(map[int][]Pdu)
+	for _, pdu := range pduDictionary {
+		pduMap[pdu.id] = append(pduMap[pdu.id], pdu)
+	}
+	return pduMap
+}
+
+func createPduFromAverageOfPdu(pdus map[int][]Pdu) []Point {
+	points := make([]Point, 0, len(pdus))
+	for _, pduList := range pdus {
+		var x int64 = 0
+		var y int64 = 0
+		for _, pdu := range pduList {
+			x += pdu.point.x
+			y += pdu.point.y
+		}
+		xAverage := x / int64(len(pduList))
+		yAverage := y / int64(len(pduList))
+		points = append(points, Point{xAverage, yAverage})
+	}
+	return points
+
 }
