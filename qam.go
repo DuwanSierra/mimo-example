@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/big"
+	"math/rand"
 	"os"
 	"time"
 )
@@ -61,8 +62,9 @@ func bitsToBytes(bits []int64) []byte {
 }
 
 func modulate(bits []int64, M *big.Int) []Point {
-	points := make([]Point, len(bits)/(M.BitLen()-1))
 	bitsPerSymbol := M.BitLen() - 1
+	points := make([]Point, (len(bits)+bitsPerSymbol-1)/bitsPerSymbol)
+	// Seed the random number generator
 	for i := 0; i < len(bits); i += bitsPerSymbol {
 		xBits := bits[i : i+bitsPerSymbol/2]
 		yBits := bits[i+bitsPerSymbol/2 : i+bitsPerSymbol]
@@ -76,6 +78,21 @@ func modulate(bits []int64, M *big.Int) []Point {
 	return points
 }
 
+func addNoiseToPdu(pdu Pdu, noise float64) Pdu {
+	min := 0.01
+	max := 1.0
+	// Generate a random number between 0.01 and 1
+	randomNumber := min + rand.Float64()*(max-min)
+	// If the random number is less than noise, add noise to the pdu
+	if randomNumber < noise {
+		pdu.point.x += int64(rand.NormFloat64() * noise)
+		pdu.point.y += int64(rand.NormFloat64() * noise)
+	}
+
+	return pdu
+
+}
+
 func bitsToInt(bits []int64) int64 {
 	val := int64(0)
 	for _, bit := range bits {
@@ -84,7 +101,7 @@ func bitsToInt(bits []int64) int64 {
 	return val
 }
 
-func demodulate(points []Point, M *big.Int, noiseStdDev float64) []int64 {
+func demodulate(points []Point, M *big.Int) []int64 {
 
 	var bits []int64
 	bitsPerSymbol := M.BitLen() - 1

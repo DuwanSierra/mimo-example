@@ -3,20 +3,33 @@ package main
 import (
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"os"
+	"sort"
 	"sync"
 	"time"
 )
 
 type Pdu struct {
 	point Point
-	id    int
+	Index int
 }
 
 type Signal struct {
 	// Define properties of a Signal here
 	data Pdu
+}
+
+type SafePduDictionary struct {
+	mu   sync.Mutex
+	pdus []Pdu
+}
+
+func (s *SafePduDictionary) Append(pdu Pdu) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pdus = append(s.pdus, pdu)
 }
 
 func transmitter(tx []chan Signal, wg *sync.WaitGroup, pdu Pdu) {
@@ -30,21 +43,20 @@ func transmitter(tx []chan Signal, wg *sync.WaitGroup, pdu Pdu) {
 	}
 }
 
-func receiver(rx []chan Signal, wg *sync.WaitGroup, pduDictionary *[]Pdu) {
+func receiver(rx []chan Signal, wg *sync.WaitGroup, safePduDictionary *SafePduDictionary) {
 	defer wg.Done()
 	// Simulate receiving a signal
 	for _, ch := range rx {
 		data := <-ch
-		//fmt.Println("Data received", data.data.id)
-		*pduDictionary = append(*pduDictionary, data.data)
+		safePduDictionary.Append(data.data)
 	}
 }
 
 func main() {
 	defer timeTrack(time.Now(), "Modulation and Demodulation")
-	pathFile := "input_video.mp4"
+	pathFile := "input_image.png"
 	level := 64
-	noise := 0.20
+	noise := 0.2
 	chunkSize := 8192 // size of each chunk in bytes
 
 	M := new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(level)), nil)
@@ -61,8 +73,8 @@ func main() {
 
 	//Antennas
 	var wg sync.WaitGroup
-	rxAntenna := 2
-	txAntenna := 2
+	rxAntenna := 10
+	txAntenna := 10
 
 	// Create a matrix of Tx to Rx connections
 	matrix := make([][]chan Signal, txAntenna)
@@ -84,13 +96,15 @@ func main() {
 
 		bits := bytesToBits(data)
 		points := modulate(bits, M)
-		pduDictionary := make([]Pdu, 0)
+		safePduDictionary := &SafePduDictionary{}
+		emitedPdus := make([]Pdu, 0, len(points))
 		//Iterate all points and send them to the antennas
 		for count, point := range points {
 			pdu := Pdu{point, count}
+			emitedPdus = append(emitedPdus, pdu)
 			for i := 0; i < txAntenna; i++ {
 				wg.Add(1)
-				go transmitter(matrix[i], &wg, pdu)
+				go transmitter(matrix[i], &wg, addNoiseToPdu(pdu, noise))
 			}
 
 			for i := 0; i < rxAntenna; i++ {
@@ -99,42 +113,72 @@ func main() {
 					rx[j] = matrix[j][i]
 				}
 				wg.Add(1)
-				go receiver(rx, &wg, &pduDictionary)
+				go receiver(rx, &wg, safePduDictionary)
 			}
 		}
 
 		wg.Wait()
-		pduMap := orderPdu(pduDictionary)
-		restorePoints := createPduFromAverageOfPdu(pduMap)
-		bitsRestore := demodulate(restorePoints, M, noise)
+		sort.Slice(safePduDictionary.pdus, func(i, j int) bool {
+			return safePduDictionary.pdus[i].Index < safePduDictionary.pdus[j].Index
+		})
+		pdusRestore := createPduFromAverageOfPdu(safePduDictionary.pdus)
+
+		fmt.Println("Restore points: ", len(pdusRestore), len(emitedPdus))
+
+		//order restore points by index
+		sort.Slice(pdusRestore, func(i, j int) bool {
+			return pdusRestore[i].Index < pdusRestore[j].Index
+		})
+
+		//Restore points are the pdus restored in point
+		restorePoints := make([]Point, 0, len(pdusRestore)*2)
+		for _, pdu := range pdusRestore {
+			restorePoints = append(restorePoints, pdu.point)
+		}
+		bitsRestore := demodulate(restorePoints, M)
 		originalBytes := bitsToBytes(bitsRestore)
 		writeRestoreFile("restore_"+pathFile, originalBytes)
 	}
 	fmt.Println("Successfully demodulated the data!")
 }
 
-func orderPdu(pduDictionary []Pdu) map[int][]Pdu {
-	//Order the pduDictionary
-	pduMap := make(map[int][]Pdu)
-	for _, pdu := range pduDictionary {
-		pduMap[pdu.id] = append(pduMap[pdu.id], pdu)
+func createPduFromAverageOfPdu(pdus []Pdu) []Pdu {
+	const threshold = 1.0
+	points := make([]Pdu, 0, len(pdus))
+	//group by id
+	groups := make(map[int][]Pdu)
+	for _, pdu := range pdus {
+		groups[pdu.Index] = append(groups[pdu.Index], pdu)
 	}
-	return pduMap
-}
-
-func createPduFromAverageOfPdu(pdus map[int][]Pdu) []Point {
-	points := make([]Point, 0, len(pdus))
-	for _, pduList := range pdus {
+	//average of points
+	for _, group := range groups {
 		var x int64 = 0
 		var y int64 = 0
-		for _, pdu := range pduList {
+		for _, pdu := range group {
 			x += pdu.point.x
 			y += pdu.point.y
 		}
-		xAverage := x / int64(len(pduList))
-		yAverage := y / int64(len(pduList))
-		points = append(points, Point{xAverage, yAverage})
+
+		xMean := x / int64(len(group))
+		yMean := y / int64(len(group))
+
+		var xSumSquares, ySumSquares float64
+		for _, pdu := range group {
+			xDiff := float64(pdu.point.x) - float64(xMean)
+			yDiff := float64(pdu.point.y) - float64(yMean)
+			xSumSquares += xDiff * xDiff
+			ySumSquares += yDiff * yDiff
+		}
+
+		xStdDev := math.Sqrt(xSumSquares / float64(len(group)))
+		yStdDev := math.Sqrt(ySumSquares / float64(len(group)))
+
+		if xStdDev > threshold || yStdDev > threshold {
+			fmt.Printf("High standard deviation for group %d: xStdDev = %f, yStdDev = %f\n", group[0].Index, xStdDev, yStdDev)
+			fmt.Println(group)
+		}
+
+		points = append(points, Pdu{point: Point{xMean, yMean}, Index: group[0].Index})
 	}
 	return points
-
 }
