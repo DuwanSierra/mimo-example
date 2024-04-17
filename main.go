@@ -54,7 +54,7 @@ func receiver(rx []chan Signal, wg *sync.WaitGroup, safePduDictionary *SafePduDi
 
 func main() {
 	defer timeTrack(time.Now(), "Modulation and Demodulation")
-	pathFile := "input_image.png"
+	pathFile := "input_video.mp4"
 	level := 64
 	noise := 0.2
 	chunkSize := 8192 // size of each chunk in bytes
