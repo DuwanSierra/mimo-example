@@ -97,11 +97,9 @@ func main() {
 		bits := bytesToBits(data)
 		points := modulate(bits, M)
 		safePduDictionary := &SafePduDictionary{}
-		emitedPdus := make([]Pdu, 0, len(points))
 		//Iterate all points and send them to the antennas
 		for count, point := range points {
 			pdu := Pdu{point, count}
-			emitedPdus = append(emitedPdus, pdu)
 			for i := 0; i < txAntenna; i++ {
 				wg.Add(1)
 				go transmitter(matrix[i], &wg, addNoiseToPdu(pdu, noise))
@@ -122,8 +120,6 @@ func main() {
 			return safePduDictionary.pdus[i].Index < safePduDictionary.pdus[j].Index
 		})
 		pdusRestore := createPduFromAverageOfPdu(safePduDictionary.pdus)
-
-		fmt.Println("Restore points: ", len(pdusRestore), len(emitedPdus))
 
 		//order restore points by index
 		sort.Slice(pdusRestore, func(i, j int) bool {
