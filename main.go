@@ -3,13 +3,62 @@ package main
 import (
 	"fmt"
 	"io"
-	"math"
 	"math/big"
 	"os"
 	"sort"
 	"sync"
 	"time"
 )
+
+// Job represents a task to be done
+type Job struct {
+	pdu      Pdu
+	channels []chan Signal
+}
+
+// Worker represents a transmitter or receiver
+type Worker struct {
+	wg                *sync.WaitGroup
+	jobs              <-chan Job
+	safePduDictionary *SafePduDictionary
+	isReceiver        bool
+}
+
+// NewWorker creates a new Worker
+func NewWorker(wg *sync.WaitGroup, jobs <-chan Job, safePduDictionary *SafePduDictionary, isReceiver bool) *Worker {
+	return &Worker{wg, jobs, safePduDictionary, isReceiver}
+}
+
+// Start starts the Worker
+func (w *Worker) Start() {
+	go func() {
+		for job := range w.jobs {
+			if w.isReceiver {
+				w.receiver(job)
+			} else {
+				w.transmitter(job)
+			}
+			w.wg.Done()
+		}
+	}()
+}
+
+// transmitter simulates transmitting a signal
+func (w *Worker) transmitter(job Job) {
+	for _, ch := range job.channels {
+		ch <- Signal{
+			data: job.pdu,
+		}
+	}
+}
+
+// receiver simulates receiving a signal
+func (w *Worker) receiver(job Job) {
+	for _, ch := range job.channels {
+		data := <-ch
+		w.safePduDictionary.Append(data.data)
+	}
+}
 
 type Pdu struct {
 	point Point
@@ -32,33 +81,26 @@ func (s *SafePduDictionary) Append(pdu Pdu) {
 	s.pdus = append(s.pdus, pdu)
 }
 
-func transmitter(tx []chan Signal, wg *sync.WaitGroup, pdu Pdu) {
-	defer wg.Done()
-	// Simulate transmitting a signal
-	for _, ch := range tx {
-		//fmt.Println("Transmitting signal: ", pdu.id)
-		ch <- Signal{
-			data: pdu,
-		}
-	}
-}
+// Reset resets the SafePduDictionary to its initial state
+func (spd *SafePduDictionary) Reset() {
+	spd.mu.Lock()
+	defer spd.mu.Unlock()
 
-func receiver(rx []chan Signal, wg *sync.WaitGroup, safePduDictionary *SafePduDictionary) {
-	defer wg.Done()
-	// Simulate receiving a signal
-	for _, ch := range rx {
-		data := <-ch
-		safePduDictionary.Append(data.data)
-	}
+	// Reset the internal state of the SafePduDictionary
+	// This depends on how your SafePduDictionary is implemented
+	// For example, if it contains a map, you can do:
+	spd.pdus = []Pdu(nil)
 }
 
 func main() {
 	defer timeTrack(time.Now(), "Modulation and Demodulation")
 	pathFile := "input_video.mp4"
 	level := 64
-	noise := 0.2
-	chunkSize := 8192 // size of each chunk in bytes
+	noise := 0.65
+	chunkSize := 1000000 // size of each chunk in bytes in this case are 1 Mb
+	restoreFileName := "restore_" + pathFile
 
+	removeFileIfExists(restoreFileName)
 	M := new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(level)), nil)
 	fmt.Println("Modulation level M: ", M)
 
@@ -73,8 +115,22 @@ func main() {
 
 	//Antennas
 	var wg sync.WaitGroup
-	rxAntenna := 10
-	txAntenna := 10
+	rxAntenna := 16
+	txAntenna := 16
+	// Create job channels for transmitters and receivers
+	txJobs := make(chan Job, txAntenna)
+	rxJobs := make(chan Job, rxAntenna)
+	safePduDictionary := &SafePduDictionary{}
+
+	// Create workers
+	for i := 0; i < txAntenna; i++ {
+		worker := NewWorker(&wg, txJobs, nil, false)
+		worker.Start()
+	}
+	for i := 0; i < rxAntenna; i++ {
+		worker := NewWorker(&wg, rxJobs, safePduDictionary, true)
+		worker.Start()
+	}
 
 	// Create a matrix of Tx to Rx connections
 	matrix := make([][]chan Signal, txAntenna)
@@ -88,6 +144,7 @@ func main() {
 	for {
 		_, err := io.ReadFull(file, data)
 		if err == io.EOF {
+			fmt.Println("End of file")
 			break
 		} else if err != nil && err != io.ErrUnexpectedEOF {
 			fmt.Println("Error reading file:", err)
@@ -96,13 +153,13 @@ func main() {
 
 		bits := bytesToBits(data)
 		points := modulate(bits, M)
-		safePduDictionary := &SafePduDictionary{}
 		//Iterate all points and send them to the antennas
 		for count, point := range points {
 			pdu := Pdu{point, count}
 			for i := 0; i < txAntenna; i++ {
 				wg.Add(1)
-				go transmitter(matrix[i], &wg, addNoiseToPdu(pdu, noise))
+				pduWithNoise := addNoiseToPdu(pdu, noise)
+				txJobs <- Job{pduWithNoise, matrix[i]}
 			}
 
 			for i := 0; i < rxAntenna; i++ {
@@ -111,15 +168,14 @@ func main() {
 					rx[j] = matrix[j][i]
 				}
 				wg.Add(1)
-				go receiver(rx, &wg, safePduDictionary)
+				rxJobs <- Job{pdu, rx}
 			}
 		}
-
 		wg.Wait()
 		sort.Slice(safePduDictionary.pdus, func(i, j int) bool {
 			return safePduDictionary.pdus[i].Index < safePduDictionary.pdus[j].Index
 		})
-		pdusRestore := createPduFromAverageOfPdu(safePduDictionary.pdus)
+		pdusRestore := createPduFromMostRepeatedPdu(safePduDictionary.pdus)
 
 		//order restore points by index
 		sort.Slice(pdusRestore, func(i, j int) bool {
@@ -133,48 +189,74 @@ func main() {
 		}
 		bitsRestore := demodulate(restorePoints, M)
 		originalBytes := bitsToBytes(bitsRestore)
-		writeRestoreFile("restore_"+pathFile, originalBytes)
+		writeRestoreFile(restoreFileName, originalBytes)
+		safePduDictionary.Reset()
 	}
+
+	close(txJobs)
+	close(rxJobs)
 	fmt.Println("Successfully demodulated the data!")
 }
 
-func createPduFromAverageOfPdu(pdus []Pdu) []Pdu {
-	const threshold = 1.0
+func createPduFromMostRepeatedPdu(pdus []Pdu) []Pdu {
+	results := make(chan Pdu, len(pdus))
 	points := make([]Pdu, 0, len(pdus))
+	var wg sync.WaitGroup
+
 	//group by id
 	groups := make(map[int][]Pdu)
 	for _, pdu := range pdus {
 		groups[pdu.Index] = append(groups[pdu.Index], pdu)
 	}
-	//average of points
+
+	//find the most repeated pdu
 	for _, group := range groups {
-		var x int64 = 0
-		var y int64 = 0
-		for _, pdu := range group {
-			x += pdu.point.x
-			y += pdu.point.y
-		}
+		wg.Add(1)
+		go func(group []Pdu) {
+			defer wg.Done()
 
-		xMean := x / int64(len(group))
-		yMean := y / int64(len(group))
+			pduCounts := make(map[Pdu]int)
+			maxCount := 0
 
-		var xSumSquares, ySumSquares float64
-		for _, pdu := range group {
-			xDiff := float64(pdu.point.x) - float64(xMean)
-			yDiff := float64(pdu.point.y) - float64(yMean)
-			xSumSquares += xDiff * xDiff
-			ySumSquares += yDiff * yDiff
-		}
+			for _, pdu := range group {
+				pduCounts[pdu]++
+				if pduCounts[pdu] > maxCount {
+					maxCount = pduCounts[pdu]
+				}
+			}
 
-		xStdDev := math.Sqrt(xSumSquares / float64(len(group)))
-		yStdDev := math.Sqrt(ySumSquares / float64(len(group)))
+			var mostRepeatedPdus []Pdu
+			for pdu, count := range pduCounts {
+				if count == maxCount {
+					mostRepeatedPdus = append(mostRepeatedPdus, pdu)
+				}
+			}
 
-		if xStdDev > threshold || yStdDev > threshold {
-			fmt.Printf("High standard deviation for group %d: xStdDev = %f, yStdDev = %f\n", group[0].Index, xStdDev, yStdDev)
-			fmt.Println(group)
-		}
+			var result Pdu
+			if len(mostRepeatedPdus) == 1 {
+				result = mostRepeatedPdus[0]
+			} else {
+				fmt.Println("Multiple most repeated pdus found, averaging them")
+				var x, y int64
+				for _, pdu := range mostRepeatedPdus {
+					x += pdu.point.x
+					y += pdu.point.y
+				}
+				x /= int64(len(mostRepeatedPdus))
+				y /= int64(len(mostRepeatedPdus))
+				result = Pdu{Point{x, y}, mostRepeatedPdus[0].Index}
+			}
 
-		points = append(points, Pdu{point: Point{xMean, yMean}, Index: group[0].Index})
+			results <- result
+		}(group)
 	}
+
+	wg.Wait()
+	close(results)
+
+	for result := range results {
+		points = append(points, result)
+	}
+
 	return points
 }

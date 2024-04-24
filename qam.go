@@ -35,6 +35,19 @@ func writeRestoreFile(path string, data []byte) error {
 	return nil
 }
 
+func removeFileIfExists(filename string) error {
+	if _, err := os.Stat(filename); err == nil {
+		// If the file exists, remove it
+		if err := os.Remove(filename); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		// If os.Stat returned an error other than ErrNotExist, return it
+		return err
+	}
+	return nil
+}
+
 func bytesToBits(data []byte) []int64 {
 	var bits []int64
 	for _, b := range data {
