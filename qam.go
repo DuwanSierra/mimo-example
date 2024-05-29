@@ -49,7 +49,7 @@ func removeFileIfExists(filename string) error {
 }
 
 func bytesToBits(data []byte) []int64 {
-	var bits []int64
+	bits := make([]int64, 0, len(data)*8)
 	for _, b := range data {
 		for i := 7; i >= 0; i-- {
 			bit := (b >> i) & 1
@@ -60,16 +60,16 @@ func bytesToBits(data []byte) []int64 {
 }
 
 func bitsToBytes(bits []int64) []byte {
-	var bytes []byte
+	if len(bits)%8 != 0 {
+		panic("Number of bits is not a multiple of 8")
+	}
+	bytes := make([]byte, len(bits)/8)
 	for i := 0; i < len(bits); i += 8 {
-		b := 0
+		var b byte
 		for j := 0; j < 8; j++ {
-			b = b << 1
-			if bits[i+j] == 1 {
-				b = b | 1
-			}
+			b = (b << 1) | byte(bits[i+j])
 		}
-		bytes = append(bytes, byte(b))
+		bytes[i/8] = b
 	}
 	return bytes
 }

@@ -94,8 +94,8 @@ func (spd *SafePduDictionary) Reset() {
 
 func main() {
 	defer timeTrack(time.Now(), "Modulation and Demodulation")
-	pathFile := "input_video.mp4"
-	level := 64
+	pathFile := "input_image.jpg"
+	level := 16
 	noise := 0.65
 	chunkSize := 1000000 // size of each chunk in bytes in this case are 1 Mb
 	restoreFileName := "restore_" + pathFile
@@ -152,7 +152,16 @@ func main() {
 		}
 
 		bits := bytesToBits(data)
-		points := modulate(bits, M)
+		//Hamming
+		hammingBits := make([]int64, 0, len(bits)/4*7)
+		for i := 0; i < len(bits); i += 4 {
+			end := i + 4
+			if end > len(bits) {
+				end = len(bits)
+			}
+			hammingBits = append(hammingBits, addHammingParityBits(bits[i:end])...)
+		}
+		points := modulate(hammingBits, M)
 		//Iterate all points and send them to the antennas
 		for count, point := range points {
 			pdu := Pdu{point, count}
@@ -188,7 +197,15 @@ func main() {
 			restorePoints = append(restorePoints, pdu.point)
 		}
 		bitsRestore := demodulate(restorePoints, M)
-		originalBytes := bitsToBytes(bitsRestore)
+		correctedBits := make([]int64, 0, len(bitsRestore)/7*4)
+		for i := 0; i < len(bitsRestore); i += 7 {
+			end := i + 7
+			if end > len(bitsRestore) {
+				end = len(bitsRestore)
+			}
+			correctedBits = append(correctedBits, checkAndCorrectHammingCode(bitsRestore[i:end])...)
+		}
+		originalBytes := bitsToBytes(correctedBits)
 		writeRestoreFile(restoreFileName, originalBytes)
 		safePduDictionary.Reset()
 	}
