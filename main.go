@@ -94,10 +94,10 @@ func (spd *SafePduDictionary) Reset() {
 
 func main() {
 	defer timeTrack(time.Now(), "Modulation and Demodulation")
-	pathFile := "input_image.jpg"
-	level := 16
+	pathFile := "input_video.mp4"
+	level := 64
 	noise := 0.65
-	chunkSize := 1000000 // size of each chunk in bytes in this case are 1 Mb
+	chunkSize := 100000 // size of each chunk in bytes in this case are 1 Mb
 	restoreFileName := "restore_" + pathFile
 
 	removeFileIfExists(restoreFileName)
